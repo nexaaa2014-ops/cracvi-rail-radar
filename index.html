@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Cracvi Rail Radar India</title>
+<title>Cracvi Rail Radar</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
 <style>
 :root{--bg:#0a1a3a;--panel:#12294f;--line:#24427a;--ink:#eef3ff;--dim:#9fb3dc;--acc:#2f7bff;--warn:#ffb020;--bad:#ff4d5e}
@@ -17,7 +17,7 @@ header h1 span{color:var(--acc)}
 .badge.live{background:#0e3a2a;color:#5dffb0}
 #map{flex:1;min-height:0;background:#cfd9ea}
 .fab{position:absolute;right:12px;z-index:900;width:46px;height:46px;border-radius:50%;border:0;background:var(--acc);color:#fff;font-size:20px;box-shadow:0 2px 8px #0006}
-#fSearch{top:130px}#fSet{top:184px;background:var(--panel)}
+#fSearch{top:130px}.toast{position:absolute;left:12px;right:70px;top:140px;z-index:900;font-size:13px;color:var(--warn);background:var(--panel);border-radius:10px;padding:0 10px}.toast:not(:empty){padding:8px 10px}
 nav{display:flex;background:#fff;padding-bottom:env(safe-area-inset-bottom,0px)}
 nav button{flex:1;border:0;background:none;padding:10px 0;font-size:12px;color:#51607f}
 nav button.on{color:var(--acc);font-weight:700;background:#eaf1ff}
@@ -37,30 +37,16 @@ label{font-size:13px;color:var(--dim)}
 </style>
 </head>
 <body>
-<header><h1>Cracvi <span>Rail Radar</span> India</h1><div class="badge" id="status">Demo</div></header>
+<header><h1>Cracvi <span>Rail Radar</span></h1><div class="badge" id="status">Demo</div></header>
 <div id="map"></div>
 <button class="fab" id="fSearch" aria-label="Search trains">&#128269;</button>
-<button class="fab" id="fSet" aria-label="Settings">&#9881;</button>
 
 <div class="sheet" id="sSearch"><h2>Find a train</h2>
 <input id="q" placeholder="Train number or name" autocomplete="off"><div id="results"></div></div>
 
-<div class="sheet" id="sSet"><h2>Settings</h2><label>Rail data</label>
-<label>API base URL (live trains endpoint)</label>
-<input id="url" placeholder="https://your-provider.com/api/trains" inputmode="url">
-<label>API key</label>
-<input id="key" type="password" placeholder="Paste your API key">
-<label>Key sent as (header name, or ?param name)</label>
-<input id="hdr" placeholder="x-api-key">
-<label>Map tile URL (put {key} where the map key goes, leave empty for free OpenStreetMap)</label>
-<input id="turl" placeholder="https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key={key}">
-<label>Map API key</label>
-<input id="mkey" type="password" placeholder="Paste your map key">
-<button class="btn" id="save">Save and go live</button>
-<button class="btn alt" id="demo">Use demo data</button>
-<p class="msg" id="msg"></p></div>
+<div id="msg" class="toast"></div>
 
-<nav><button class="on" data-t="radar">RailRadar</button><button data-t="trains">Trains</button><button data-t="settings">Settings</button></nav>
+<nav><button class="on" data-t="radar">RailRadar</button><button data-t="trains">Trains</button></nav>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
@@ -69,14 +55,12 @@ const store={get(k){try{return localStorage.getItem(k)||""}catch(e){return ""}},
 const map=L.map('map',{zoomControl:false,minZoom:4,maxBounds:[[5,66],[38,99]],maxBoundsViscosity:1}).setView([21,79],5);
 L.control.zoom({position:'bottomright'}).addTo(map);
 let tiles;
-function setTiles(){
+function setTiles(u){
   if(tiles)map.removeLayer(tiles);
-  let u=store.get('turl'),k=store.get('mkey'),o={maxZoom:18,attribution:'&copy; OpenStreetMap'};
-  if(u&&k){u=u.replace('{key}',encodeURIComponent(k));if(/mapbox/i.test(u)){o.tileSize=512;o.zoomOffset=-1}}
-  else u='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-  tiles=L.tileLayer(u,o).addTo(map);
-  tiles.once('tileerror',()=>{$('msg').textContent='Map tiles failed to load. Check the tile URL and map key.'});
+  tiles=L.tileLayer(u||'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; OpenStreetMap, MapTiler'}).addTo(map);
 }
+setTiles();
+fetch('/.netlify/functions/config').then(r=>r.json()).then(c=>{if(c.tiles)setTiles(c.tiles)}).catch(()=>{});
 
 let trains=[],markers={},live=false,timer=null;
 const colorFor=t=>t.delay>30?'#ff4d5e':t.delay>5?'#ffb020':'#2f7bff';
@@ -101,14 +85,10 @@ function normalize(json){
   }).filter(t=>isFinite(t.lat)&&isFinite(t.lng)&&t.lat>5&&t.lat<38&&t.lng>66&&t.lng<99);
 }
 async function fetchLive(){
-  const url=store.get('url'),key=store.get('key'),hdr=store.get('hdr')||'X-API-Key';
-  const headers={};let u=url;
-  if(hdr.startsWith('?')){u+=(url.includes('?')?'&':'?')+hdr.slice(1)+'='+encodeURIComponent(key)}
-  else headers[hdr]=(/^authorization$/i.test(hdr)?'Bearer ':'')+key;
-  const r=await fetch(u,{headers});
-  if(r.status===401)throw new Error('key rejected (401)');
+  const r=await fetch('/.netlify/functions/trains');
+  if(r.status===401)throw new Error('rail key rejected (401)');
   if(r.status===429)throw new Error('monthly request limit reached (429)');
-  if(!r.ok)throw new Error('API returned '+r.status);
+  if(!r.ok)throw new Error('server returned '+r.status);
   return normalize(await r.json());
 }
 
@@ -126,7 +106,7 @@ function draw(){
 }
 map.on('moveend',draw);
 async function tick(){
-  if(live){try{trains=await fetchLive();$('msg').textContent=''}catch(e){$('msg').textContent='Could not load live data: '+e.message;live=false;trains=[]}}
+  if(live){try{trains=await fetchLive();$('msg').textContent=''}catch(e){$('msg').textContent='Live data unavailable ('+e.message+'). Showing demo trains.';live=false;trains=[];clearInterval(timer);timer=setInterval(tick,3000)}}
   if(!live){if(!trains.length)demoInit();demoStep()}
   draw();
 }
@@ -134,13 +114,12 @@ function start(){clearInterval(timer);tick();timer=setInterval(()=>{if(!document
 $('status').title='Tap to refresh';$('status').onclick=()=>tick();
 
 /* UI */
-function open(id){['sSearch','sSet'].forEach(s=>$(s).classList.toggle('open',s===id))}
+function open(id){['sSearch'].forEach(s=>$(s).classList.toggle('open',s===id))}
 $('fSearch').onclick=()=>{open('sSearch');$('q').focus()};
-$('fSet').onclick=()=>open('sSet');
 map.on('click',()=>open(null));
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
-  const t=b.dataset.t;open(t==='settings'?'sSet':t==='trains'?'sSearch':null);if(t==='trains'){$('q').value='';render('')}});
+  const t=b.dataset.t;open(t==='trains'?'sSearch':null);if(t==='trains'){$('q').value='';render('')}});
 function render(v){
   v=v.toLowerCase();
   const list=trains.filter(t=>!v||t.no.includes(v)||t.name.toLowerCase().includes(v)).slice(0,30);
@@ -148,18 +127,7 @@ function render(v){
 }
 $('q').oninput=e=>render(e.target.value);
 $('results').onclick=e=>{const r=e.target.closest('.row');if(!r)return;const t=trains.find(x=>(x.no||x.name)===r.dataset.id);if(t){open(null);map.setView([t.lat,t.lng],11);setTimeout(()=>{const m=markers[r.dataset.id];if(m)m.openPopup()},400)}};
-$('save').onclick=()=>{
-  const u=$('url').value.trim(),k=$('key').value.trim();
-  store.set('turl',$('turl').value.trim());store.set('mkey',$('mkey').value.trim());setTiles();
-  if(!u&&!k){$('msg').textContent='Map saved.';return}
-  if(!u||!k){$('msg').textContent='Enter both the rail API URL and your rail key.';return}
-  store.set('url',u);store.set('key',k);store.set('hdr',$('hdr').value.trim());
-  live=true;trains=[];$('msg').textContent='Connecting…';start();
-};
-$('demo').onclick=()=>{live=false;trains=[];start();$('msg').textContent='Using demo data.'};
-$('turl').value=store.get('turl')||'https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key={key}';$('mkey').value=store.get('mkey');setTiles();
-$('url').value=store.get('url')||'https://api.railradar.in/v1/legacy/trains/live-map';$('hdr').value=store.get('hdr')||'X-API-Key';$('key').value=store.get('key');
-live=!!(store.get('url')&&store.get('key'));
+live=true;
 start();
 </script>
 </body>
